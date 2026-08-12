@@ -23,8 +23,8 @@ def test_read_search_and_exact_patch(tmp_path):
     source.parent.mkdir()
     source.write_text("one\ntwo\nthree\n", encoding="utf-8")
 
-    assert ca.read_file("src/app.py", tmp_path, offset=1, limit=1) == "two"
-    assert ca.search_files("**/*.py", tmp_path) == "src/app.py"
+    assert ca.run_read("src/app.py", tmp_path, offset=1, limit=1) == "two"
+    assert ca.run_glob("**/*.py", tmp_path) == "src/app.py"
     assert "Updated src/app.py" in ca.apply_patch(
         "src/app.py", "two", "TWO", tmp_path
     )
@@ -58,12 +58,12 @@ def test_preview_patch_is_unified_diff(tmp_path):
     assert "+x = 2" in diff
 
 
-def test_run_command_returns_timeout(monkeypatch, tmp_path):
+def test_run_bash_returns_timeout(monkeypatch, tmp_path):
     def expire(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="partial")
 
     monkeypatch.setattr(subprocess, "run", expire)
-    result = ca.run_command("python slow.py", tmp_path, timeout=1)
+    result = ca.run_bash("python slow.py", tmp_path, timeout=1)
     assert result.timed_out is True
     assert result.returncode == -1
 
@@ -110,9 +110,9 @@ def test_runtime_reset_turn_clears_transient_results(tmp_path):
 
 
 def test_tool_schemas_have_required_fields():
-    names = {tool["name"] for tool in ca.TOOLS}
-    assert names == {"search_files", "read_file", "apply_patch", "run_command"}
-    for tool in ca.TOOLS:
+    names = {tool["name"] for tool in ca.BUILTIN_TOOLS}
+    assert names == {"glob", "read_file", "apply_patch", "bash"}
+    for tool in ca.BUILTIN_TOOLS:
         assert tool["description"]
         assert tool["input_schema"]["type"] == "object"
         assert isinstance(tool["input_schema"]["required"], list)
@@ -129,7 +129,7 @@ def test_compaction_preserves_recent_tool_pair():
     assert "compacted" in compacted[0]["content"].lower()
 
 
-def test_call_with_retry_retries_transient_error():
+def test_with_retry_retries_transient_error():
     attempts = []
 
     def operation():
@@ -138,8 +138,12 @@ def test_call_with_retry_retries_transient_error():
             raise RuntimeError("429 rate limit")
         return "ok"
 
-    assert ca.call_with_retry(operation, max_retries=3, sleep=lambda _: None) == "ok"
+    state = ca.RecoveryState()
+    assert ca.with_retry(
+        operation, state, max_retries=3, sleep=lambda _: None
+    ) == "ok"
     assert len(attempts) == 3
+    assert state.retries == 2
 
 
 class FakeMessages:
@@ -177,3 +181,22 @@ def test_build_system_prompt_contains_workspace(tmp_path):
     prompt = ca.build_system_prompt(tmp_path)
     assert str(tmp_path.resolve()) in prompt
     assert "inspect" in prompt.lower()
+
+
+def test_create_client_explicitly_injects_api_key_and_base_url(monkeypatch):
+    captured = {}
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "deepseek-key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "wrong-external-token")
+
+    ca._create_client(FakeAnthropic)
+
+    assert captured == {
+        "api_key": "deepseek-key",
+        "base_url": "https://api.deepseek.com/anthropic",
+    }

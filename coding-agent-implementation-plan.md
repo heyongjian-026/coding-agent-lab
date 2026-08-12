@@ -48,8 +48,8 @@
 
 **Interfaces:**
 - Produces: `resolve_workspace_path(path: str, workspace: Path) -> Path`
-- Produces: `read_file(path: str, workspace: Path, offset: int = 0, limit: int = 400) -> str`
-- Produces: `search_files(pattern: str, workspace: Path) -> str`
+- Produces: `run_read(path: str, workspace: Path, offset: int = 0, limit: int = 400) -> str`（工具名为 `read_file`）
+- Produces: `run_glob(pattern: str, workspace: Path) -> str`（工具名为 `glob`）
 - Produces: `apply_patch(path: str, old_text: str, new_text: str, workspace: Path) -> str`
 
 - [x] Write tests proving traversal is rejected, reads support offset/limit, glob search returns relative paths, and patching requires exactly one old-text match.
@@ -66,7 +66,7 @@
 **Interfaces:**
 - Produces: `CommandResult` dataclass with `command`, `returncode`, `stdout`, `stderr`, `timed_out`
 - Produces: `classify_command(command: str) -> str` returning `allow`, `ask`, or `deny`
-- Produces: `run_command(command: str, workspace: Path, timeout: int = 60) -> CommandResult`
+- Produces: `run_bash(command: str, workspace: Path, timeout: int = 60) -> CommandResult`（工具名为 `bash`）
 - Produces: `detect_verification_commands(workspace: Path) -> list[str]`
 - Produces: `git_summary(workspace: Path) -> str`
 - Produces: `preview_patch(path: str, old_text: str, new_text: str, workspace: Path) -> str`
@@ -84,7 +84,7 @@
 - Modify: `hyj/test_coding_agent.py`
 
 **Interfaces:**
-- Produces: `TOOLS: list[dict]` for `search_files`, `read_file`, `apply_patch`, and `run_command`
+- Produces: `BUILTIN_TOOLS: list[dict]` for `glob`, `read_file`, `apply_patch`, and `bash`
 - Produces: `ToolRuntime.execute(name: str, args: dict) -> str`
 - Produces: `SessionLogger.log(event: str, data: dict) -> None`
 - Consumes: an injectable `approve(prompt: str) -> bool` callback
@@ -104,7 +104,7 @@
 - Produces: `AgentLimits(max_rounds=30, max_tool_calls=80, max_context_chars=120000)` dataclass
 - Produces: `RecoveryState` dataclass
 - Produces: `compact_messages(messages: list, max_chars: int) -> list`
-- Produces: `call_with_retry(fn, max_retries: int = 4)`
+- Produces: `with_retry(fn, state, max_retries: int = 4)`
 - Produces: `agent_loop(client, messages: list, runtime: ToolRuntime, model: str, limits: AgentLimits) -> AgentReport`
 
 - [ ] Create fake-client tests for a normal final answer, one tool call round-trip, multiple tool calls, rate-limit retry without real sleeping, tool/round limit termination, malformed tool arguments, and preservation of recent messages during compaction.

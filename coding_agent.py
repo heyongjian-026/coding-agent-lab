@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
-
+from anthropic import Anthropic
 
 MAX_OUTPUT_CHARS = 20_000
 SENSITIVE_FILENAMES = {".env", ".env.local", ".env.production"}
@@ -75,7 +75,8 @@ def _reject_sensitive_file(path: Path) -> None:
         raise ValueError(f"Refusing to access sensitive file: {path.name}")
 
 
-def read_file(
+# s20-compatible handler name; workspace remains explicit for this standalone CLI.
+def run_read(
     path: str, workspace: Path, offset: int = 0, limit: int = 400
 ) -> str:
     target = resolve_workspace_path(path, workspace)
@@ -88,7 +89,8 @@ def read_file(
     return "\n".join(lines[offset : offset + limit])
 
 
-def search_files(pattern: str, workspace: Path) -> str:
+# s20-compatible handler name.
+def run_glob(pattern: str, workspace: Path) -> str:
     root = workspace.resolve()
     matches = []
     for match in root.glob(pattern):
@@ -178,7 +180,8 @@ def _clip(value: str | bytes | None) -> str:
     return value
 
 
-def run_command(command: str, workspace: Path, timeout: int = 60) -> CommandResult:
+# s20-compatible handler name with a structured result and stricter execution.
+def run_bash(command: str, workspace: Path, timeout: int = 60) -> CommandResult:
     argv = _split_command(command)
     try:
         result = subprocess.run(
@@ -223,7 +226,7 @@ def detect_verification_commands(workspace: Path) -> list[str]:
 
 
 def git_summary(workspace: Path) -> str:
-    result = run_command("git status --short", workspace, timeout=15)
+    result = run_bash("git status --short", workspace, timeout=15)
     return result.stdout if result.returncode == 0 else "(Git status unavailable)"
 
 
@@ -254,9 +257,10 @@ class SessionLogger:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-TOOLS = [
+# Keep s20's name for the built-in tool definitions.
+BUILTIN_TOOLS = [
     {
-        "name": "search_files",
+        "name": "glob",
         "description": "Find workspace files matching a glob pattern.",
         "input_schema": {
             "type": "object",
@@ -291,7 +295,7 @@ TOOLS = [
         },
     },
     {
-        "name": "run_command",
+        "name": "bash",
         "description": "Run one program in the workspace; shell operators are unsupported.",
         "input_schema": {
             "type": "object",
@@ -326,10 +330,10 @@ class ToolRuntime:
     def execute(self, name: str, args: dict) -> str:
         self.logger.log("tool_start", {"name": name, "args": args})
         try:
-            if name == "search_files":
-                output = search_files(args["pattern"], self.workspace)
+            if name == "glob":
+                output = run_glob(args["pattern"], self.workspace)
             elif name == "read_file":
-                output = read_file(
+                output = run_read(
                     args["path"],
                     self.workspace,
                     int(args.get("offset", 0)),
@@ -346,7 +350,7 @@ class ToolRuntime:
                         args["path"], args["old_text"], args["new_text"], self.workspace
                     )
                     self.changed_files.add(args["path"])
-            elif name == "run_command":
+            elif name == "bash":
                 command = args["command"]
                 permission = classify_command(command)
                 if permission == "deny":
@@ -354,7 +358,7 @@ class ToolRuntime:
                 elif permission == "ask" and not self.approve(f"Run command? {command}"):
                     output = "Denied by user"
                 else:
-                    output = run_command(
+                    output = run_bash(
                         command, self.workspace, int(args.get("timeout", 60))
                     ).render()
             else:
@@ -372,7 +376,7 @@ class ToolRuntime:
             if not self.approve(f"Run detected verification command? {command}"):
                 results.append(f"{command}: skipped by user")
                 continue
-            rendered = run_command(command, self.workspace, timeout=120).render()
+            rendered = run_bash(command, self.workspace, timeout=120).render()
             results.append(f"{command}\n{rendered}")
         self.verification = results
         return results
@@ -426,8 +430,10 @@ def compact_messages(messages: list, max_chars: int) -> list:
     return [summary] + recent
 
 
-def call_with_retry(
+# Keep s20's retry helper name; injectable limits/sleep make it testable.
+def with_retry(
     fn: Callable[[], Any],
+    state: RecoveryState,
     max_retries: int = 4,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Any:
@@ -440,6 +446,7 @@ def call_with_retry(
             if not any(marker in text for marker in ("429", "529", "ratelimit", "overloaded")):
                 raise
             last_error = error
+            state.retries += 1
             if attempt + 1 < max_retries:
                 sleep(min(2**attempt, 8))
     raise RuntimeError(f"Transient API error after {max_retries} attempts: {last_error}")
@@ -459,7 +466,7 @@ def build_system_prompt(workspace: Path) -> str:
     return (
         "You are a careful CLI coding agent. "
         f"Your workspace is {workspace.resolve()}. "
-        "Inspect relevant files before editing. Use search_files and read_file, "
+        "Inspect relevant files before editing. Use glob and read_file, "
         "apply minimal patches, then run relevant tests or builds. Never claim "
         "verification succeeded unless a tool result proves it. Respect denied "
         "operations and finish with changed files, verification, and remaining risks."
@@ -488,12 +495,12 @@ def agent_loop(
                 model=model,
                 system=build_system_prompt(runtime.workspace),
                 messages=messages,
-                tools=TOOLS,
+                tools=BUILTIN_TOOLS,
                 max_tokens=limits.max_tokens,
             )
 
         try:
-            response = call_with_retry(request)
+            response = with_retry(request, state)
         except Exception as error:
             report.stopped_reason = "api_error"
             report.remaining_issues.append(f"API error: {error}")
@@ -563,6 +570,18 @@ def _print_report(report: AgentReport, workspace: Path) -> None:
     print(git_summary(workspace))
 
 
+def _create_client(client_class: Any) -> Any:
+    """Create the SDK client from explicit project configuration.
+
+    Passing both values prevents an unrelated ANTHROPIC_AUTH_TOKEN injected by
+    the parent terminal or IDE from silently overriding this project's key.
+    """
+    return client_class(
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        base_url=os.getenv("ANTHROPIC_BASE_URL"),
+    )
+
+
 def run_cli(workspace: Path | None = None) -> int:
     parser = argparse.ArgumentParser(description="Small workspace-safe CLI coding agent")
     parser.add_argument("--workspace", type=Path, default=workspace or Path.cwd())
@@ -572,7 +591,7 @@ def run_cli(workspace: Path | None = None) -> int:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv()
+        load_dotenv(override=True)
         from anthropic import Anthropic
     except ImportError as error:
         print(f"Missing dependency: {error}")
@@ -588,7 +607,7 @@ def run_cli(workspace: Path | None = None) -> int:
         return 2
 
     runtime = ToolRuntime(root, approve=_terminal_approve)
-    client = Anthropic()
+    client = _create_client(Anthropic)
     history: list[dict] = []
     print(f"Coding Agent workspace: {root}")
     print("Enter a coding task; q exits.\n")
