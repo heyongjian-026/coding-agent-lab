@@ -1,0 +1,11 @@
+{
+  "zotero": {
+    "command": ["replace-with-zotero-mcp-command"]
+  },
+  "github": {
+    "command": ["replace-with-github-mcp-command"],
+    "env": {
+      "GITHUB_TOKEN": "set-this-in-a-private-local-config"
+    }
+  }
+}

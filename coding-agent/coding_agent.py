@@ -591,7 +591,7 @@ def run_cli(workspace: Path | None = None) -> int:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(override=True)
+        load_dotenv(Path(__file__).with_name(".env"), override=True)
         from anthropic import Anthropic
     except ImportError as error:
         print(f"Missing dependency: {error}")

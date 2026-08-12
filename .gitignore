@@ -2,7 +2,8 @@
 .env.*
 !.env.example
 .coding-agent/
+.research-agent/
+mcp_servers.json
 __pycache__/
 .pytest_cache/
 *.py[cod]
-

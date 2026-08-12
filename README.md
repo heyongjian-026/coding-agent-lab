@@ -1,33 +1,29 @@
-# Coding Agent Lab
+# Agent Projects Lab
 
-一个用于学习 Agent Harness 的本地 CLI Coding Agent。它可以在启动目录中搜索、读取和修改代码，并调用测试或构建命令进行验证。
+本仓库用于实现和对比两个 Agent 项目。
 
-## 当前状态
+## 目录
 
-项目处于 MVP 开发阶段，已经实现文件工具、Patch/Diff、命令执行、权限确认、Agent Loop、重试、上下文压缩、日志和基础测试。当前版本尚未经过安全加固，不应在不可信代码仓库或生产环境中运行。
+- `coding-agent/`：本地 CLI Coding Agent，负责读取、修改、测试代码并安全执行工具。
+- `research-workflow-agent/`：面向计算机专业研究生的科研工作流 Agent。
+- `agent-projects-plan.md`：两个项目的总体规划和功能边界。
+- `note`：学习笔记。
 
-## 运行
+## 当前进度
 
-```powershell
-pip install anthropic python-dotenv pytest
-$env:MODEL_ID="your-model-id"
-python coding_agent.py --workspace D:\path\to\project
-```
+| 项目 | 状态 | 已实现 |
+|---|---|---|
+| Coding Agent | MVP 完善阶段 | 文件工具、Patch/Diff、命令执行、审批、Agent Loop、重试、上下文压缩、日志与测试 |
+| Research Workflow Agent | Stage 4 完成 | 向量 RAG、长期记忆、任务看板、Cron、审批通知、MCP 动态工具与科研子 Agent |
 
-运行测试：
+两个项目当前共有 34 项自动化测试。下一步分别是 Coding Agent 安全加固，以及科研工作流 Agent 的端到端研究周报流程。
 
-```powershell
-python -m pytest test_coding_agent.py -v
-```
+## 文档入口
 
-## 文件
-
-- `coding_agent.py`：Coding Agent MVP。
-- `test_coding_agent.py`：自动化测试。
-- `agent-projects-plan.md`：两个 Agent 项目的功能规划。
-- `coding-agent-implementation-plan.md`：实现计划、当前进度和下一步安全改进。
+- [Coding Agent 使用说明](coding-agent/README.md)
+- [Research Workflow Agent 使用说明](research-workflow-agent/README.md)
+- [项目总体规划](agent-projects-plan.md)
 
 ## 来源与许可
 
-本项目基于 [shareAI-lab/learn-claude-code](https://github.com/shareAI-lab/learn-claude-code) 的教学代码与思路进行提取和改造，采用 MIT License。
-
+本仓库基于 [shareAI-lab/learn-claude-code](https://github.com/shareAI-lab/learn-claude-code) 的教学代码与思路进行提取和扩展，采用 MIT License。

@@ -4,15 +4,15 @@
 
 **Goal:** Build a usable single-agent CLI that safely reads, patches, and tests the repository from which it is launched.
 
-**Architecture:** Create one self-contained teaching implementation in `hyj/coding_agent.py`, extracting only the relevant ideas from `s20_comprehensive/code.py`. Keep workspace safety, tools, permissions, context management, recovery, logging, verification, and CLI orchestration as separately testable functions/classes inside that file. Do not modify any lesson file.
+**Architecture:** Create one self-contained teaching implementation in `hyj/coding-agent/coding_agent.py`, extracting only the relevant ideas from `s20_comprehensive/code.py`. Keep workspace safety, tools, permissions, context management, recovery, logging, verification, and CLI orchestration as separately testable functions/classes inside that file. Do not modify any lesson file.
 
 **Tech Stack:** Python 3.10+, Anthropic Messages API, `python-dotenv`, Python standard library, pytest.
 
-## Progress checkpoint (2026-08-11)
+## Progress checkpoint (2026-08-12)
 
-- [x] Created `hyj/coding_agent.py` and `hyj/test_coding_agent.py`.
+- [x] Created `hyj/coding-agent/coding_agent.py` and `hyj/coding-agent/test_coding_agent.py`.
 - [x] Implemented and tested workspace path validation, file reading/search, exact patching, new-file creation, diff preview, command results, basic permission classification, tool dispatch, JSONL logging, retry, context compaction, Agent Loop, CLI help, and per-turn state reset.
-- [x] Focused verification: `18 passed`.
+- [x] Current focused verification: `19 passed`.
 - [x] Full repository verification with third-party pytest plugin autoload disabled: `42 passed`.
 - [x] Completed a read-only sub-Agent code review.
 - [ ] Address the security and protocol findings below before calling the CLI production-usable.
@@ -28,14 +28,14 @@
 7. Derive changed files from canonical paths plus Git/runtime snapshots; improve verification detection without forcing Jest-only arguments.
 8. Add missing tests for output truncation, approvals, malformed/multiple tools, limits, retry exhaustion, CLI interruption/configuration, verification, Git summaries, and secret handling.
 
-**Resume point:** Start with finding 1 using TDD. Do not add advanced features until findings 1–8 are resolved.
+**Resume point:** Start with finding 1 using TDD. Do not add advanced features until findings 1–8 are resolved. The implementation now lives under `hyj/coding-agent/`.
 
 ## Global Constraints
 
 - The first version is a local single-Agent CLI, normally launched in the VS Code terminal.
 - The launch directory is the workspace; file tools must reject paths outside it.
 - Include file search/read/patch, shell execution, diff approval, test detection, retry/recovery, limits, compaction, logs, Git summary, Ctrl+C handling, and a final report.
-- Exclude multi-Agent, Cron, persistent task boards, long-term memory, worktrees, Skills, and MCP.
+- Exclude multi-Agent, Cron, persistent task boards, long-term memory, worktrees, and Skills from the MVP. MCP is excluded from every Coding Agent route and belongs to the separate assistant/workflow Agent project.
 - Preserve the educational readability of this repository; do not introduce a framework.
 
 ---
@@ -43,8 +43,8 @@
 ### Task 1: Workspace-safe file and search tools
 
 **Files:**
-- Create: `hyj/coding_agent.py`
-- Create: `hyj/test_coding_agent.py`
+- Create: `hyj/coding-agent/coding_agent.py`
+- Create: `hyj/coding-agent/test_coding_agent.py`
 
 **Interfaces:**
 - Produces: `resolve_workspace_path(path: str, workspace: Path) -> Path`
@@ -53,15 +53,15 @@
 - Produces: `apply_patch(path: str, old_text: str, new_text: str, workspace: Path) -> str`
 
 - [x] Write tests proving traversal is rejected, reads support offset/limit, glob search returns relative paths, and patching requires exactly one old-text match.
-- [x] Run `python -m pytest hyj/test_coding_agent.py -v` and confirm the tests fail because the module does not exist.
+- [x] Run `python -m pytest hyj/coding-agent/test_coding_agent.py -v` and confirm the tests fail because the module does not exist.
 - [x] Extract and tighten the path/read/glob/edit behavior from s20 lines 379–445. Use `Path.resolve()` plus `is_relative_to()`, UTF-8 file access, sorted relative search results, and exact replacement.
 - [x] Run the focused test file and confirm all Task 1 tests pass.
 
 ### Task 2: Command execution, permissions, diffs, and project verification
 
 **Files:**
-- Modify: `hyj/coding_agent.py`
-- Modify: `hyj/test_coding_agent.py`
+- Modify: `hyj/coding-agent/coding_agent.py`
+- Modify: `hyj/coding-agent/test_coding_agent.py`
 
 **Interfaces:**
 - Produces: `CommandResult` dataclass with `command`, `returncode`, `stdout`, `stderr`, `timed_out`
@@ -80,8 +80,8 @@
 ### Task 3: Tool schemas, dispatch, approval, and logging
 
 **Files:**
-- Modify: `hyj/coding_agent.py`
-- Modify: `hyj/test_coding_agent.py`
+- Modify: `hyj/coding-agent/coding_agent.py`
+- Modify: `hyj/coding-agent/test_coding_agent.py`
 
 **Interfaces:**
 - Produces: `BUILTIN_TOOLS: list[dict]` for `glob`, `read_file`, `apply_patch`, and `bash`
@@ -97,8 +97,8 @@
 ### Task 4: Agent loop, limits, retry, and context compaction
 
 **Files:**
-- Modify: `hyj/coding_agent.py`
-- Modify: `hyj/test_coding_agent.py`
+- Modify: `hyj/coding-agent/coding_agent.py`
+- Modify: `hyj/coding-agent/test_coding_agent.py`
 
 **Interfaces:**
 - Produces: `AgentLimits(max_rounds=30, max_tool_calls=80, max_context_chars=120000)` dataclass
@@ -115,8 +115,8 @@
 ### Task 5: CLI session, automatic verification, and final report
 
 **Files:**
-- Modify: `hyj/coding_agent.py`
-- Modify: `hyj/test_coding_agent.py`
+- Modify: `hyj/coding-agent/coding_agent.py`
+- Modify: `hyj/coding-agent/test_coding_agent.py`
 
 **Interfaces:**
 - Produces: `AgentReport` with `final_text`, `changed_files`, `verification`, `remaining_issues`, and `stopped_reason`
@@ -126,8 +126,8 @@
 - [ ] Add tests for workspace selection, `.env` model configuration, empty input exit, Ctrl+C return code, verification result inclusion, and final Git-based changed-file summary.
 - [ ] Run focused tests and confirm failure.
 - [ ] Implement the CLI with `Path.cwd()` as default workspace, `MODEL_ID` configuration, persistent in-process conversation history, colored but optional status messages, safe interrupt handling, and final reporting. Instruct the model to inspect before editing, verify relevant changes, and state unverified work honestly.
-- [ ] Run `python -m pytest hyj/test_coding_agent.py -v` and then `python -m pytest -q`.
-- [ ] Run `python hyj/coding_agent.py --help` and a no-network smoke test using the fake client path.
+- [ ] Run `python -m pytest hyj/coding-agent/test_coding_agent.py -v` and then `python -m pytest -q`.
+- [ ] Run `python hyj/coding-agent/coding_agent.py --help` and a no-network smoke test using the fake client path.
 
 ## Self-review
 
