@@ -1,5 +1,6 @@
 from datetime import datetime
 from types import SimpleNamespace
+import json
 
 import research_agent as ra
 
@@ -40,6 +41,71 @@ def test_vector_rag_accepts_injected_embedding_model(tmp_path):
     kb.add_document("Agent", "agent context")
     kb.add_document("Database", "database index")
     assert kb.search_knowledge("agent")[0]["title"] == "Agent"
+
+
+def test_api_embedding_batches_dashscope_requests():
+    calls = []
+
+    class Response:
+        def __init__(self, value):
+            self.value = value
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return json.dumps(self.value).encode()
+
+    def opener(request, timeout):
+        payload = json.loads(request.data)
+        calls.append(payload)
+        data = [{"index": i, "embedding": [float(i), 1.0]}
+                for i, _ in enumerate(payload["input"])]
+        return Response({"data": data})
+
+    model = ra.APIEmbeddingModel("https://example.test/v1", "secret", "embedding",
+                                 batch_size=2, dimensions=2, opener=opener)
+    assert len(model.embed_many(["a", "b", "c"])) == 3
+    assert [len(call["input"]) for call in calls] == [2, 1]
+    assert all(call["dimensions"] == 2 for call in calls)
+
+
+def test_elasticsearch_knowledge_base_indexes_and_searches():
+    calls = []
+
+    class Embedding:
+        dimensions = 2
+        def embed_many(self, texts):
+            return [[1.0, 0.0] for _ in texts]
+        def embed(self, text):
+            return [1.0, 0.0]
+
+    class Response:
+        def __init__(self, value=None):
+            self.value = value or {}
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return json.dumps(self.value).encode()
+
+    def opener(request, timeout):
+        payload = json.loads(request.data) if request.data else None
+        calls.append((request.method, request.full_url, payload))
+        if request.full_url.endswith("/_search"):
+            return Response({"hits": {"hits": [{"_score": 1.0, "_source": {
+                "document_id": "doc_1", "title": "Agent", "source": "manual",
+                "chunk": 0, "content": "context compression"}}]}})
+        return Response()
+
+    kb = ra.ElasticsearchKnowledgeBase(Embedding(), opener=opener)
+    kb.add_document("Agent", "context compression")
+    hits = kb.search_knowledge("context")
+    assert hits[0]["title"] == "Agent"
+    assert any(method == "PUT" and "/_doc/" in url for method, url, _ in calls)
+    search = next(payload for method, url, payload in calls if url.endswith("/_search"))
+    assert search["knn"]["query_vector"] == [1.0, 0.0]
 
 
 def test_approval_lifecycle(tmp_path):

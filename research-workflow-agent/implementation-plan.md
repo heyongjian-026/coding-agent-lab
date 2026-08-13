@@ -2,7 +2,7 @@
 
 ## Progress
 
-Current checkpoint: Stage 4 complete, 15 focused tests passing. MCP server commands remain user-supplied configuration; no Zotero or GitHub server is bundled or automatically installed.
+Current checkpoint (verified 2026-08-13): Stage 4 complete, DashScope-compatible embeddings and Elasticsearch storage configured, and 17 focused tests passing. MCP server commands remain user-supplied configuration; no Zotero or GitHub server is bundled or automatically installed.
 
 - [x] Stage 1: single-Agent loop and Anthropic-compatible CLI
 - [x] Stage 1: persistent research task board
@@ -11,6 +11,7 @@ Current checkpoint: Stage 4 complete, 15 focused tests passing. MCP server comma
 - [x] Stage 1: human approval records
 - [x] Stage 1: persistent Cron jobs and due-job injection
 - [x] Stage 2: pluggable local embedding model and persistent vector index
+- [x] Stage 2 extension: DashScope-compatible batch embeddings and Elasticsearch vector store
 - [x] Stage 2: approval-gated notification delivery to a local outbox
 - [x] Stage 3: JSON-RPC stdio MCP client, configured server boundary, and dynamic tools
 - [x] Stage 4: specialized background research sub-Agents and message bus

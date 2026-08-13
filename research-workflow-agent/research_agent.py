@@ -12,6 +12,9 @@ import re
 import subprocess
 import threading
 import time
+import base64
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -141,6 +144,53 @@ class LocalEmbeddingModel:
         norm = math.sqrt(sum(value * value for value in vector))
         return [value / norm for value in vector] if norm else vector
 
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        return [self.embed(text) for text in texts]
+
+
+class APIEmbeddingModel:
+    """OpenAI-compatible embedding API client, including DashScope."""
+
+    def __init__(self, url: str, api_key: str, model: str,
+                 batch_size: int = 10, dimensions: int = 2048, opener=None):
+        if not api_key:
+            raise ValueError("EMBEDDING_API_KEY is required for API embeddings")
+        self.url = url.rstrip("/") + "/embeddings"
+        self.api_key = api_key
+        self.model = model
+        self.batch_size = max(1, min(batch_size, 10))
+        self.dimensions = dimensions
+        self.opener = opener or urllib.request.urlopen
+
+    def _request(self, texts: list[str]) -> list[list[float]]:
+        payload = {"model": self.model, "input": texts, "dimensions": self.dimensions}
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {self.api_key}",
+                     "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self.opener(request, timeout=60) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Embedding API failed ({exc.code}): {detail}") from exc
+        ordered = sorted(body.get("data", []), key=lambda item: item["index"])
+        if len(ordered) != len(texts):
+            raise RuntimeError("Embedding API returned an unexpected vector count")
+        return [item["embedding"] for item in ordered]
+
+    def embed_many(self, texts: list[str]) -> list[list[float]]:
+        vectors = []
+        for start in range(0, len(texts), self.batch_size):
+            vectors.extend(self._request(texts[start:start + self.batch_size]))
+        return vectors
+
+    def embed(self, text: str) -> list[float]:
+        return self.embed_many([text])[0]
+
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right):
@@ -160,8 +210,11 @@ class KnowledgeBase:
         documents = _read_json(self.path, [])
         doc_id = _id("doc")
         texts = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)] or [""]
-        chunks = [{"content": text, "embedding": self.embedding_model.embed(title + " " + text)}
-                  for text in texts]
+        inputs = [title + " " + text for text in texts]
+        embed_many = getattr(self.embedding_model, "embed_many", None)
+        embeddings = embed_many(inputs) if embed_many else [self.embedding_model.embed(x) for x in inputs]
+        chunks = [{"content": text, "embedding": embedding}
+                  for text, embedding in zip(texts, embeddings)]
         documents.append({"id": doc_id, "title": title, "source": source, "chunks": chunks})
         _write_json(self.path, documents)
         return doc_id
@@ -181,6 +234,95 @@ class KnowledgeBase:
                                  "source": doc["source"], "chunk": index,
                                  "score": round(score, 6), "content": content})
         return sorted(hits, key=lambda x: (-x["score"], x["title"]))[:limit]
+
+
+class ElasticsearchKnowledgeBase:
+    """Elasticsearch-backed dense-vector RAG store."""
+
+    INDEX_NAME = "research-agent-knowledge"
+
+    def __init__(self, embedding_model, host: str = "localhost", port: int = 9200,
+                 scheme: str = "http", username: str = "", password: str = "", opener=None):
+        self.embedding_model = embedding_model
+        self.base_url = f"{scheme}://{host}:{port}"
+        self.username, self.password = username, password
+        self.opener = opener or urllib.request.urlopen
+        self._ensure_index()
+
+    def _request(self, method: str, path: str, payload: dict | None = None):
+        headers = {"Content-Type": "application/json"}
+        if self.username:
+            token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+            headers["Authorization"] = f"Basic {token}"
+        request = urllib.request.Request(
+            self.base_url + path,
+            data=None if payload is None else json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method=method,
+        )
+        try:
+            with self.opener(request, timeout=60) as response:
+                raw = response.read()
+                return json.loads(raw.decode("utf-8")) if raw else {}
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Elasticsearch failed ({exc.code}): {detail}") from exc
+
+    def _ensure_index(self) -> None:
+        dimensions = self.embedding_model.dimensions
+        try:
+            self._request("HEAD", f"/{self.INDEX_NAME}")
+        except RuntimeError as exc:
+            if "(404)" not in str(exc):
+                raise
+            self._request("PUT", f"/{self.INDEX_NAME}", {"mappings": {"properties": {
+                "document_id": {"type": "keyword"}, "title": {"type": "text"},
+                "source": {"type": "keyword"}, "chunk": {"type": "integer"},
+                "content": {"type": "text"},
+                "embedding": {"type": "dense_vector", "dims": dimensions,
+                              "index": True, "similarity": "cosine"}}}})
+
+    def add_document(self, title: str, content: str, source: str = "manual",
+                     chunk_size: int = 800) -> str:
+        doc_id = _id("doc")
+        texts = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)] or [""]
+        vectors = self.embedding_model.embed_many([title + " " + text for text in texts])
+        for index, (text, vector) in enumerate(zip(texts, vectors)):
+            item_id = f"{doc_id}-{index}"
+            self._request("PUT", f"/{self.INDEX_NAME}/_doc/{item_id}", {
+                "document_id": doc_id, "title": title, "source": source,
+                "chunk": index, "content": text, "embedding": vector})
+        self._request("POST", f"/{self.INDEX_NAME}/_refresh")
+        return doc_id
+
+    def search_knowledge(self, query: str, limit: int = 5) -> list[dict]:
+        vector = self.embedding_model.embed(query)
+        result = self._request("POST", f"/{self.INDEX_NAME}/_search", {
+            "size": limit, "knn": {"field": "embedding", "query_vector": vector,
+                                    "k": limit, "num_candidates": max(limit * 10, 100)},
+            "_source": ["document_id", "title", "source", "chunk", "content"]})
+        return [{**hit["_source"], "score": round(hit.get("_score", 0.0), 6)}
+                for hit in result.get("hits", {}).get("hits", [])]
+
+
+def build_knowledge_base_from_env(data_dir: Path):
+    """Select remote RAG when configured; otherwise retain the local teaching backend."""
+    url = os.getenv("EMBEDDING_API_URL", "").strip()
+    model = os.getenv("EMBEDDING_MODEL", "").strip()
+    if not (url and model):
+        return KnowledgeBase(data_dir)
+    embedding = APIEmbeddingModel(
+        url, os.getenv("EMBEDDING_API_KEY", ""), model,
+        int(os.getenv("EMBEDDING_BATCH_SIZE", "10")),
+        int(os.getenv("EMBEDDING_DIMENSION", "2048")),
+    )
+    return ElasticsearchKnowledgeBase(
+        embedding, os.getenv("ELASTICSEARCH_HOST", "localhost"),
+        int(os.getenv("ELASTICSEARCH_PORT", "9200")),
+        os.getenv("ELASTICSEARCH_SCHEME", "http"),
+        os.getenv("ELASTICSEARCH_USERNAME", "elastic"),
+        os.getenv("ELASTICSEARCH_PASSWORD", ""),
+    )
 
 
 @dataclass
@@ -486,7 +628,8 @@ class ResearchRuntime:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.tasks = TaskStore(self.data_dir)
         self.memory = MemoryStore(self.data_dir)
-        self.knowledge = KnowledgeBase(self.data_dir, embedding_model)
+        self.knowledge = (KnowledgeBase(self.data_dir, embedding_model) if embedding_model
+                          else build_knowledge_base_from_env(self.data_dir))
         self.approvals = ApprovalStore(self.data_dir)
         self.notifications = NotificationStore(self.data_dir, self.approvals)
         self.scheduler = CronScheduler(self.data_dir)

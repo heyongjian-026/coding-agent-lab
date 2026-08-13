@@ -9,14 +9,16 @@
 - `agent-projects-plan.md`：两个项目的总体规划和功能边界。
 - `note`：学习笔记。
 
-## 当前进度
+## 当前进度（2026-08-13 同步）
 
 | 项目 | 状态 | 已实现 |
 |---|---|---|
-| Coding Agent | MVP 完善阶段 | 文件工具、Patch/Diff、命令执行、审批、Agent Loop、重试、上下文压缩、日志与测试 |
-| Research Workflow Agent | Stage 4 完成 | 向量 RAG、长期记忆、任务看板、Cron、审批通知、MCP 动态工具与科研子 Agent |
+| Coding Agent | MVP 已实现，安全加固阶段 | 文件工具、Patch/Diff、命令执行、审批、Agent Loop、重试、上下文压缩、日志与测试 |
+| Research Workflow Agent | Stage 4 完成，准备 Stage 5 | 向量 RAG、长期记忆、任务看板、Cron、审批通知、MCP 动态工具与科研子 Agent |
 
-两个项目当前共有 34 项自动化测试。下一步分别是 Coding Agent 安全加固，以及科研工作流 Agent 的端到端研究周报流程。
+两个项目现有 36 项聚焦自动化测试（Coding Agent 19 项、Research Workflow Agent 17 项），均已于 2026-08-13 重新验证通过。
+
+下一步分别是 Coding Agent 的命令与工具协议安全加固，以及 Research Workflow Agent 的端到端研究周报流程。
 
 ## 文档入口
 

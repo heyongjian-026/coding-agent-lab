@@ -8,11 +8,11 @@
 
 **Tech Stack:** Python 3.10+, Anthropic Messages API, `python-dotenv`, Python standard library, pytest.
 
-## Progress checkpoint (2026-08-12)
+## Progress checkpoint (updated 2026-08-13)
 
 - [x] Created `hyj/coding-agent/coding_agent.py` and `hyj/coding-agent/test_coding_agent.py`.
 - [x] Implemented and tested workspace path validation, file reading/search, exact patching, new-file creation, diff preview, command results, basic permission classification, tool dispatch, JSONL logging, retry, context compaction, Agent Loop, CLI help, and per-turn state reset.
-- [x] Current focused verification: `19 passed`.
+- [x] Focused verification rerun on 2026-08-13: `19 passed`.
 - [x] Full repository verification with third-party pytest plugin autoload disabled: `42 passed`.
 - [x] Completed a read-only sub-Agent code review.
 - [ ] Address the security and protocol findings below before calling the CLI production-usable.
@@ -29,6 +29,18 @@
 8. Add missing tests for output truncation, approvals, malformed/multiple tools, limits, retry exhaustion, CLI interruption/configuration, verification, Git summaries, and secret handling.
 
 **Resume point:** Start with finding 1 using TDD. Do not add advanced features until findings 1–8 are resolved. The implementation now lives under `hyj/coding-agent/`.
+
+### Checklist synchronization note
+
+Tasks 1–5 below are the original build plan and retain their historical red/green TDD checkboxes. They are not the current completion dashboard: the MVP implementations across all five tasks exist, while several originally specified edge-case tests and the eight security/protocol findings above remain open.
+
+| Area | Current state | Remaining work |
+|---|---|---|
+| Task 1: workspace/file tools | Implemented and tested | Security review continues with the shared command boundary |
+| Task 2: commands/diffs/verification | MVP implemented | argv schema, approval boundary, truncation and verification coverage |
+| Task 3: dispatch/approval/logging | MVP implemented | Atomic patch approval and stronger redaction |
+| Task 4: loop/retry/compaction | MVP implemented | Complete tool-result pairing, limits and incomplete-response coverage |
+| Task 5: CLI/reporting | MVP implemented | Interrupt/configuration/verification/Git-summary edge cases |
 
 ## Global Constraints
 
