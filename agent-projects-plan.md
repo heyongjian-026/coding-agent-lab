@@ -83,5 +83,6 @@
 
 1. Coding Agent：完成命令安全、日志脱敏、工具协议配对和异常恢复加固。
 2. Research Workflow Agent：实现端到端研究周报生成与评估。
-3. 为 Zotero、GitHub 选择实际 MCP Server，并在本地私有配置中接入。
-4. 增加真实模型的集成测试和完整演示数据。
+3. Research Workflow Agent：实现独立后台 Cron 服务，无需用户触发 Agent Loop 即可轮询持久化任务；同时持久化最近触发状态，支持重启去重、失败隔离、执行日志和安全停止。
+4. 为 Zotero、GitHub 选择实际 MCP Server，并在本地私有配置中接入。
+5. 增加真实模型的集成测试和完整演示数据。

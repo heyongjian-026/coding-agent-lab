@@ -122,6 +122,7 @@ class MemoryStore:
             words = _tokens(query)
             items = sorted(items, key=lambda x: len(words & _tokens(x["content"])), reverse=True)
             items = [item for item in items if words & _tokens(item["content"])]
+            return items[:limit]
         return items[-limit:]
 
 
@@ -359,7 +360,10 @@ class ApprovalStore:
         return _read_json(self.path, [])
 
     def get_approval(self, request_id: str) -> dict | None:
-        return next((item for item in self.list_approvals() if item["id"] == request_id), None)
+        for item in self.list_approvals():
+            if item["id"] == request_id:
+                return item
+        return None
 
     def mark_executed(self, request_id: str) -> None:
         items = self.list_approvals()

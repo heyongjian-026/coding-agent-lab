@@ -16,6 +16,7 @@ Current checkpoint (verified 2026-08-13): Stage 4 complete, DashScope-compatible
 - [x] Stage 3: JSON-RPC stdio MCP client, configured server boundary, and dynamic tools
 - [x] Stage 4: specialized background research sub-Agents and message bus
 - [ ] Stage 5: weekly-report workflow and end-to-end evaluation
+- [ ] Stage 6: standalone background Cron service
 
 ## Naming
 
@@ -24,3 +25,7 @@ Concepts shared with `s20_comprehensive/code.py` retain familiar names where pra
 ## Next checkpoint
 
 Implement Stage 5 with tests: compose retrieval, task state, specialist results and approval-gated notification into a weekly-report workflow and evaluate it end to end.
+
+## Later checkpoint: standalone scheduler
+
+Implement an independent background service that checks persisted Cron jobs without requiring an interactive CLI turn. It should persist last-fired state across restarts, prevent duplicate execution within the same scheduled minute, shut down cleanly, isolate job failures, and provide observable execution logs. Add tests for restart deduplication, one-shot job disabling, recurring jobs, concurrent polling, graceful shutdown, and failed-job recovery.

@@ -22,6 +22,16 @@ def test_memory_is_persistent_and_searchable(tmp_path):
     assert again.recall("上下文压缩")[0]["category"] == "research_direction"
 
 
+def test_memory_query_limit_keeps_most_relevant_and_empty_query_keeps_latest(tmp_path):
+    store = ra.MemoryStore(tmp_path)
+    store.remember("agent context compression", "most_relevant")
+    store.remember("agent database", "less_relevant")
+    store.remember("unrelated note", "latest")
+
+    assert store.recall("agent context", limit=1)[0]["category"] == "most_relevant"
+    assert store.recall(limit=1)[0]["category"] == "latest"
+
+
 def test_local_rag_retrieval(tmp_path):
     kb = ra.KnowledgeBase(tmp_path)
     kb.add_document("Agent论文", "上下文压缩能够减少长对话的 token 消耗。")
