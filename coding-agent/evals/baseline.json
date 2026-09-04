@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "suite": "coding-agent-offline-v1",
+  "metrics": {
+    "task_completion_rate": 1.0,
+    "test_pass_rate": 1.0,
+    "unrelated_modification_rate": 0.0,
+    "tool_selection_accuracy": 1.0,
+    "argument_accuracy": 0.9642857142857143,
+    "average_repair_rounds": 0.3333333333333333,
+    "dangerous_action_block_rate": 1.0
+  },
+  "tolerances": {
+    "task_completion_rate": 0.0,
+    "test_pass_rate": 0.0,
+    "unrelated_modification_rate": 0.0,
+    "tool_selection_accuracy": 0.0,
+    "argument_accuracy": 0.0,
+    "average_repair_rounds": 0.0,
+    "dangerous_action_block_rate": 0.0
+  }
+}

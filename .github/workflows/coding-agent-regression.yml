@@ -1,0 +1,42 @@
+name: Coding Agent Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "coding-agent/**"
+      - "coding-agent-TODO.md"
+      - ".github/workflows/coding-agent-regression.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "coding-agent/**"
+      - "coding-agent-TODO.md"
+      - ".github/workflows/coding-agent-regression.yml"
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: coding-agent
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install anthropic python-dotenv pytest
+
+      - name: Run focused regression tests
+        run: python -m pytest test_coding_agent.py test_eval_runner.py -q
+
+      - name: Run offline evaluation and compare baseline
+        run: python eval_runner.py --dataset evals/tasks.json --output evals/latest-results.json --baseline evals/baseline.json
+
+      - name: Print evaluation report
+        if: always()
+        run: cat evals/latest-results.json
