@@ -18,7 +18,16 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+from bad_cases import BadCaseStore
+from memory_system import LongTermMemory, MemoryStore, ShortTermSession, WorkingMemory
+from multi_agent import (AgentTeam, MessageBus, ROLE_SPECS, WorkflowState,
+                         parse_role_result)
+from resilience import (FallbackEmbeddingModel, FallbackJournal,
+                        FallbackKnowledgeBase, ModelEndpoint,
+                        ResilientModelClient, classify_complexity, operation_id)
+from observability import InstrumentedEmbedding, TraceStore
 
 
 DATA_DIR_NAME = ".research-agent"
@@ -100,30 +109,6 @@ class TaskStore:
         task.status = "completed"
         self.save_task(task)
         return f"Completed {task.id} ({task.subject})"
-
-
-class MemoryStore:
-    """Durable research preferences, conclusions and project facts."""
-
-    def __init__(self, data_dir: Path):
-        self.path = data_dir / "memory.json"
-
-    def remember(self, content: str, category: str = "fact") -> str:
-        items = _read_json(self.path, [])
-        item = {"id": _id("mem"), "category": category, "content": content,
-                "created_at": datetime.now().isoformat(timespec="seconds")}
-        items.append(item)
-        _write_json(self.path, items)
-        return item["id"]
-
-    def recall(self, query: str = "", limit: int = 10) -> list[dict]:
-        items = _read_json(self.path, [])
-        if query:
-            words = _tokens(query)
-            items = sorted(items, key=lambda x: len(words & _tokens(x["content"])), reverse=True)
-            items = [item for item in items if words & _tokens(item["content"])]
-            return items[:limit]
-        return items[-limit:]
 
 
 def _tokens(text: str) -> set[str]:
@@ -306,24 +291,57 @@ class ElasticsearchKnowledgeBase:
                 for hit in result.get("hits", {}).get("hits", [])]
 
 
-def build_knowledge_base_from_env(data_dir: Path):
+def build_knowledge_base_from_env(data_dir: Path, traces: TraceStore | None = None):
     """Select remote RAG when configured; otherwise retain the local teaching backend."""
+    local_embedding = LocalEmbeddingModel()
+    if traces:
+        local_embedding = InstrumentedEmbedding(local_embedding, traces, "local")
+    local = KnowledgeBase(data_dir, local_embedding)
     url = os.getenv("EMBEDDING_API_URL", "").strip()
     model = os.getenv("EMBEDDING_MODEL", "").strip()
     if not (url and model):
-        return KnowledgeBase(data_dir)
+        return local
+    journal = FallbackJournal(data_dir)
     embedding = APIEmbeddingModel(
         url, os.getenv("EMBEDDING_API_KEY", ""), model,
         int(os.getenv("EMBEDDING_BATCH_SIZE", "10")),
         int(os.getenv("EMBEDDING_DIMENSION", "2048")),
     )
-    return ElasticsearchKnowledgeBase(
-        embedding, os.getenv("ELASTICSEARCH_HOST", "localhost"),
-        int(os.getenv("ELASTICSEARCH_PORT", "9200")),
-        os.getenv("ELASTICSEARCH_SCHEME", "http"),
-        os.getenv("ELASTICSEARCH_USERNAME", "elastic"),
-        os.getenv("ELASTICSEARCH_PASSWORD", ""),
-    )
+    if traces:
+        embedding = InstrumentedEmbedding(embedding, traces, "remote")
+    try:
+        remote = ElasticsearchKnowledgeBase(
+            embedding, os.getenv("ELASTICSEARCH_HOST", "localhost"),
+            int(os.getenv("ELASTICSEARCH_PORT", "9200")),
+            os.getenv("ELASTICSEARCH_SCHEME", "http"),
+            os.getenv("ELASTICSEARCH_USERNAME", "elastic"),
+            os.getenv("ELASTICSEARCH_PASSWORD", ""),
+        )
+    except Exception as exc:
+        journal.defer("knowledge_init", {"backend": "elasticsearch"}, str(exc))
+        return local
+    return FallbackKnowledgeBase(remote, local, journal)
+
+
+def build_model_client(anthropic_class, data_dir: Path) -> ResilientModelClient:
+    """Create one model interface containing primary, fallback and optional tiers."""
+    journal = FallbackJournal(data_dir)
+    primary_model = os.getenv("MODEL_ID", MODEL)
+    primary = anthropic_class(api_key=os.getenv("ANTHROPIC_API_KEY"),
+                              base_url=os.getenv("ANTHROPIC_BASE_URL"))
+    endpoints = [ModelEndpoint("primary", primary, primary_model,
+                               os.getenv("PRIMARY_MODEL_TIER", "strong"), True)]
+    fallback_model = os.getenv("FALLBACK_MODEL_ID", "").strip()
+    if fallback_model:
+        fallback = anthropic_class(
+            api_key=os.getenv("FALLBACK_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
+            base_url=os.getenv("FALLBACK_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL"))
+        endpoints.append(ModelEndpoint("fallback", fallback, fallback_model,
+                                       os.getenv("FALLBACK_MODEL_TIER", "strong")))
+    light_model = os.getenv("LIGHT_MODEL_ID", "").strip()
+    if light_model and light_model not in {item.model for item in endpoints}:
+        endpoints.append(ModelEndpoint("light", primary, light_model, "light"))
+    return ResilientModelClient(endpoints, journal)
 
 
 @dataclass
@@ -568,63 +586,6 @@ class MCPClient:
         return "\n".join(texts) if texts else json.dumps(result, ensure_ascii=False)
 
 
-class MessageBus:
-    """Thread-safe inboxes shared by Lead and research sub-Agents."""
-
-    def __init__(self):
-        self._inboxes: dict[str, list[dict]] = {}
-        self._lock = threading.Lock()
-
-    def send(self, sender: str, target: str, content: str, message_type: str = "message") -> None:
-        with self._lock:
-            self._inboxes.setdefault(target, []).append(
-                {"from": sender, "to": target, "type": message_type, "content": content})
-
-    def read_inbox(self, name: str) -> list[dict]:
-        with self._lock:
-            return self._inboxes.pop(name, [])
-
-
-class AgentTeam:
-    """Background specialist Agents; child Agents cannot spawn recursively."""
-
-    def __init__(self, runtime, client_factory: Callable, model: str):
-        self.runtime = runtime; self.client_factory = client_factory; self.model = model
-        self.BUS = MessageBus(); self.active_teammates: dict[str, threading.Thread] = {}
-        self._lock = threading.Lock()
-
-    def spawn_subagent(self, name: str, role: str, prompt: str) -> str:
-        safe_name = normalize_mcp_name(name)
-        with self._lock:
-            if safe_name in self.active_teammates:
-                return f"Subagent '{safe_name}' already exists"
-
-        def run():
-            try:
-                client = self.client_factory()
-                messages = [{"role": "user", "content":
-                             f"You are {safe_name}, specialist role: {role}. Task: {prompt}"}]
-                allowed = {tool["name"] for tool in TOOLS} - {
-                    "spawn_subagent", "collect_subagent_results", "connect_mcp",
-                    "deliver_notification"}
-                summary = agent_loop(client, messages, self.runtime, self.model,
-                                     max_rounds=12, allowed_tool_names=allowed)
-                self.BUS.send(safe_name, "lead", summary, "result")
-            except Exception as exc:
-                self.BUS.send(safe_name, "lead", f"Subagent error: {exc}", "error")
-            finally:
-                with self._lock: self.active_teammates.pop(safe_name, None)
-
-        thread = threading.Thread(target=run, daemon=True, name=f"agent-{safe_name}")
-        with self._lock: self.active_teammates[safe_name] = thread
-        thread.start()
-        return f"Subagent '{safe_name}' spawned as {role}"
-
-    def collect_subagent_results(self) -> str:
-        messages = self.BUS.read_inbox("lead")
-        return json.dumps(messages, ensure_ascii=False) if messages else "No subagent results yet"
-
-
 class ResearchRuntime:
     def __init__(self, workspace: Path, embedding_model=None):
         self.workspace = workspace.resolve()
@@ -632,11 +593,30 @@ class ResearchRuntime:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.tasks = TaskStore(self.data_dir)
         self.memory = MemoryStore(self.data_dir)
-        self.knowledge = (KnowledgeBase(self.data_dir, embedding_model) if embedding_model
-                          else build_knowledge_base_from_env(self.data_dir))
         self.approvals = ApprovalStore(self.data_dir)
+        human_approved = lambda approval_id: bool(
+            self.approvals.get_approval(approval_id)
+            and self.approvals.get_approval(approval_id)["status"] == "approved")
+        self.traces = TraceStore(
+            self.data_dir,
+            request_human=lambda payload: self.approvals.request_approval(
+                "continue_over_budget", payload).id,
+            human_approved=human_approved,
+        )
+        self.bad_cases = BadCaseStore(
+            self.data_dir,
+            request_human=lambda payload: self.approvals.request_approval(
+                "review_bad_case", payload).id,
+            human_approved=human_approved,
+        )
+        selected_embedding = embedding_model
+        if selected_embedding:
+            selected_embedding = InstrumentedEmbedding(selected_embedding, self.traces, "injected")
+        self.knowledge = (KnowledgeBase(self.data_dir, selected_embedding) if selected_embedding
+                          else build_knowledge_base_from_env(self.data_dir, self.traces))
         self.notifications = NotificationStore(self.data_dir, self.approvals)
         self.scheduler = CronScheduler(self.data_dir)
+        self.fallbacks = FallbackJournal(self.data_dir)
         self.mcp_clients: dict[str, MCPClient] = {}
         self.team: AgentTeam | None = None
         self.tool_lock = threading.RLock()
@@ -673,10 +653,87 @@ class ResearchRuntime:
                               "input_schema": definition.get("inputSchema", {"type": "object"})})
         return tools
 
+    def _mcp_fallback_clients(self, server: str, tool_name: str) -> list[tuple[str, MCPClient, str]]:
+        providers = [(server, self.mcp_clients[server], tool_name)]
+        config = next((value for name, value in self._mcp_config().items()
+                       if normalize_mcp_name(name) == server), {})
+        for fallback in config.get("fallback_servers", []):
+            safe = normalize_mcp_name(fallback)
+            client = self.mcp_clients.get(safe)
+            definition = next((tool for tool in client.tools
+                               if normalize_mcp_name(tool["name"]) == normalize_mcp_name(tool_name)),
+                              None) if client else None
+            if client and definition:
+                providers.append((safe, client, definition["name"]))
+        return providers
+
+    def _call_mcp_with_fallback(self, server: str, tool_name: str, args: dict,
+                                mutating: bool = False) -> str:
+        payload = {"server": server, "tool": tool_name, "args": args}
+        op_id = operation_id("mcp", payload)
+        providers = [(name, lambda client=client, actual=actual: client.call_tool(actual, args))
+                     for name, client, actual in self._mcp_fallback_clients(server, tool_name)]
+        try:
+            return self.fallbacks.execute("mcp", op_id, providers, cache_result=mutating)
+        except Exception as exc:
+            pending_id = self.fallbacks.defer("mcp", payload, str(exc))
+            return f"MCP unavailable; operation saved as pending task {pending_id}"
+
+    def resolve_conflict(self, decision_id: str, selected_id: str) -> str:
+        if not self.team:
+            return "Error: Agent team is not configured"
+        decision = self.team.arbitrator.get_decision(decision_id)
+        if not decision or not decision.approval_id:
+            return "Error: conflict does not have a human approval request"
+        approval = self.approvals.get_approval(decision.approval_id)
+        if not approval or approval["status"] != "approved":
+            return "Error: human approval is required before resolving this conflict"
+        resolved = self.team.arbitrator.resolve_human(decision_id, selected_id)
+        return json.dumps(asdict(resolved), ensure_ascii=False)
+
     def execute(self, name: str, args: dict) -> str:
         # Shared file-backed stores are intentionally serialized across agents.
+        started = time.perf_counter()
         with self.tool_lock:
-            return self._execute_unlocked(name, args)
+            output = self._execute_unlocked(name, args)
+        trace_id = self.traces.current_trace_id
+        failed = output.startswith("Error") or " unavailable" in output
+        if trace_id:
+            self.traces.record_span(
+                trace_id, self._component_for_tool(name), name,
+                "failed" if failed else "success",
+                (time.perf_counter() - started) * 1000,
+                error=output if failed else "",
+                metadata={"agent_tool": True},
+            )
+        if failed and not name.startswith(("record_bad_case", "search_bad_cases",
+                                           "replay_bad_case", "record_case_remediation")):
+            try:
+                self.bad_cases.collect(
+                    self._case_type_for_tool(name), args,
+                    [{"tool": name, "args": args}], output, name,
+                )
+            except Exception:
+                pass
+        return output
+
+    @staticmethod
+    def _component_for_tool(name: str) -> str:
+        if name.startswith("mcp__"):
+            return "mcp"
+        if name in {"add_document", "search_knowledge"}:
+            return "rag"
+        if name in {"remember", "recall", "save_working", "add_evidence", "update_progress"}:
+            return "memory"
+        if any(token in name for token in ("subagent", "workflow", "conclusion")):
+            return "collaboration"
+        return "tool"
+
+    @classmethod
+    def _case_type_for_tool(cls, name: str) -> str:
+        component = cls._component_for_tool(name)
+        return {"rag": "retrieval", "memory": "memory",
+                "collaboration": "agent_conflict"}.get(component, "tool")
 
     def _execute_unlocked(self, name: str, args: dict) -> str:
         handlers: dict[str, Callable] = {
@@ -684,6 +741,9 @@ class ResearchRuntime:
             "search_knowledge": lambda **kw: json.dumps(self.knowledge.search_knowledge(**kw), ensure_ascii=False),
             "remember": self.memory.remember,
             "recall": lambda **kw: json.dumps(self.memory.recall(**kw), ensure_ascii=False),
+            "save_working": lambda **kw: json.dumps(asdict(self.memory.save_working(**kw)), ensure_ascii=False),
+            "add_evidence": lambda **kw: json.dumps(asdict(self.memory.add_evidence(**kw)), ensure_ascii=False),
+            "update_progress": lambda **kw: json.dumps(asdict(self.memory.update_progress(**kw)), ensure_ascii=False),
             "create_task": lambda **kw: json.dumps(asdict(self.tasks.create_task(**kw)), ensure_ascii=False),
             "list_tasks": lambda: json.dumps([asdict(x) for x in self.tasks.list_tasks()], ensure_ascii=False),
             "claim_task": self.tasks.claim_task,
@@ -701,6 +761,47 @@ class ResearchRuntime:
                                              if self.team else "Error: Agent team is not configured"),
             "collect_subagent_results": lambda: (self.team.collect_subagent_results()
                                                   if self.team else "No agent team configured"),
+            "cancel_subagent": lambda **kw: (self.team.cancel_subagent(**kw)
+                                               if self.team else "No agent team configured"),
+            "reassign_subagent": lambda **kw: (self.team.reassign_failed(**kw)
+                                                 if self.team else "No agent team configured"),
+            "run_research_workflow": lambda **kw: (json.dumps(
+                asdict(self.team.run_research_workflow(**kw)), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "submit_conclusion": lambda **kw: (json.dumps(
+                asdict(self.team.arbitrator.submit(**kw)), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "list_conclusion_conflicts": lambda **kw: (json.dumps(
+                [asdict(item) for item in self.team.arbitrator.conflicts(**kw)],
+                ensure_ascii=False) if self.team else "No agent team configured"),
+            "arbitrate_conclusions": lambda **kw: (json.dumps(
+                asdict(self.team.arbitrator.arbitrate(**kw)), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "promote_conclusion": lambda **kw: (self.team.arbitrator.promote(
+                memory=self.memory, **kw) if self.team else "No agent team configured"),
+            "list_workflow_checkpoints": lambda **kw: (json.dumps(
+                self.team.store.list_snapshots(**kw), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "rollback_workflow": lambda **kw: (json.dumps(
+                asdict(self.team.rollback_workflow(**kw)), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "resume_workflow": lambda **kw: (json.dumps(
+                asdict(self.team.resume_workflow(**kw)), ensure_ascii=False)
+                if self.team else "No agent team configured"),
+            "record_bad_case": lambda **kw: json.dumps(
+                asdict(self.bad_cases.collect(**kw)), ensure_ascii=False),
+            "search_bad_cases": lambda **kw: json.dumps(
+                self.bad_cases.search(**kw), ensure_ascii=False),
+            "replay_bad_case": lambda **kw: json.dumps(
+                self.bad_cases.replay(**kw), ensure_ascii=False),
+            "record_case_remediation": lambda **kw: json.dumps(
+                asdict(self.bad_cases.record_remediation(**kw)), ensure_ascii=False),
+            "get_trace_report": lambda **kw: json.dumps(
+                self.traces.report(**kw), ensure_ascii=False),
+            "get_monitoring_metrics": lambda: json.dumps(
+                self.traces.metrics(), ensure_ascii=False),
+            "compare_agent_modes": lambda: json.dumps(
+                self.traces.compare_modes(), ensure_ascii=False),
         }
         if name.startswith("mcp__"):
             parts = name.split("__", 2)
@@ -716,7 +817,7 @@ class ResearchRuntime:
                 request = self.approvals.request_approval(
                     "mcp_tool_call", {"server": parts[1], "tool": definition["name"], "args": args})
                 return f"MCP call blocked pending approval: {request.id}"
-            return client.call_tool(definition["name"], args)
+            return self._call_mcp_with_fallback(parts[1], definition["name"], args)
         handler = handlers.get(name)
         if not handler: return f"Error: unknown tool '{name}'"
         try: return str(handler(**args))
@@ -734,7 +835,8 @@ class ResearchRuntime:
         client = self.mcp_clients.get(payload["server"])
         if not client:
             return f"MCP server '{payload['server']}' is not connected"
-        result = client.call_tool(payload["tool"], payload.get("args", {}))
+        result = self._call_mcp_with_fallback(payload["server"], payload["tool"],
+                                              payload.get("args", {}), mutating=True)
         self.approvals.mark_executed(request_id)
         return result
 
@@ -753,6 +855,15 @@ TOOLS = [
     _tool("remember", "Persist an important research preference, fact, or conclusion.",
           {"content": {"type": "string"}, "category": {"type": "string"}}, ["content"]),
     _tool("recall", "Recall durable research memory.", {"query": {"type": "string"}, "limit": {"type": "integer"}}),
+    _tool("save_working", "Save a task plan in disposable working memory.",
+          {"task_id": {"type": "string"}, "plan": {"type": "array", "items": {"type": "string"}}}, ["task_id"]),
+    _tool("add_evidence", "Attach sourced evidence to task working memory.",
+          {"task_id": {"type": "string"}, "content": {"type": "string"},
+           "source": {"type": "string"}, "confidence": {"type": "number"}},
+          ["task_id", "content", "source"]),
+    _tool("update_progress", "Update one planned step in working memory.",
+          {"task_id": {"type": "string"}, "step": {"type": "string"},
+           "status": {"type": "string"}}, ["task_id", "step", "status"]),
     _tool("create_task", "Create a durable research task.",
           {"subject": {"type": "string"}, "description": {"type": "string"},
            "blockedBy": {"type": "array", "items": {"type": "string"}}, "due_at": {"type": "string"}}, ["subject"]),
@@ -777,6 +888,48 @@ TOOLS = [
           {"name": {"type": "string"}, "role": {"type": "string"},
            "prompt": {"type": "string"}}, ["name", "role", "prompt"]),
     _tool("collect_subagent_results", "Collect completed specialist-Agent results from the Lead inbox.", {}),
+    _tool("cancel_subagent", "Request cooperative cancellation of a running specialist Agent.",
+          {"name": {"type": "string"}}, ["name"]),
+    _tool("reassign_subagent", "Reassign a failed, timed-out, or cancelled specialist task.",
+          {"name": {"type": "string"}, "replacement": {"type": "string"}}, ["name"]),
+    _tool("run_research_workflow", "Run the durable Planner-Researcher-Writer-Reviewer workflow.",
+          {"research_question": {"type": "string"}}, ["research_question"]),
+    _tool("submit_conclusion", "Submit a conclusion with evidence and confidence for conflict checks.",
+          {"question": {"type": "string"}, "claim": {"type": "string"},
+           "agent": {"type": "string"}, "evidence": {"type": "array", "items": {"type": "object"}},
+           "confidence": {"type": "number"}}, ["question", "claim", "agent", "evidence", "confidence"]),
+    _tool("list_conclusion_conflicts", "Find conflicting Agent conclusions for one question.",
+          {"question": {"type": "string"}}, ["question"]),
+    _tool("arbitrate_conclusions", "Ask the Lead to arbitrate evidence or request human review.",
+          {"conclusion_ids": {"type": "array", "items": {"type": "string"}}}, ["conclusion_ids"]),
+    _tool("promote_conclusion", "Promote only an approved conclusion into long-term memory.",
+          {"decision_id": {"type": "string"}}, ["decision_id"]),
+    _tool("list_workflow_checkpoints", "List recoverable checkpoints for a workflow.",
+          {"workflow_id": {"type": "string"}}, ["workflow_id"]),
+    _tool("rollback_workflow", "Restore a workflow to a selected checkpoint.",
+          {"workflow_id": {"type": "string"}, "checkpoint_id": {"type": "string"}},
+          ["workflow_id", "checkpoint_id"]),
+    _tool("resume_workflow", "Continue a paused workflow from its last restored state.",
+          {"workflow_id": {"type": "string"}}, ["workflow_id"]),
+    _tool("record_bad_case", "Record a failed retrieval, citation, report, memory, collaboration, or output case.",
+          {"case_type": {"type": "string"}, "task_input": {},
+           "trajectory": {"type": "array", "items": {"type": "object"}},
+           "result": {}, "failure_stage": {"type": "string"},
+           "source": {"type": "string"}, "category": {"type": "string"}},
+          ["case_type", "task_input", "result", "failure_stage"]),
+    _tool("search_bad_cases", "Search the human-approved Bad Case library by type or category.",
+          {"query": {"type": "string"}, "category": {"type": "string"},
+           "case_type": {"type": "string"}, "accepted_only": {"type": "boolean"}}),
+    _tool("replay_bad_case", "Load an accepted Bad Case as a deterministic replay package.",
+          {"case_id": {"type": "string"}}, ["case_id"]),
+    _tool("record_case_remediation", "Attach root cause, fixed version and retest result to a Bad Case.",
+          {"case_id": {"type": "string"}, "root_cause": {"type": "string"},
+           "fixed_version": {"type": "string"}, "retest_result": {"type": "string"}},
+          ["case_id", "root_cause", "fixed_version", "retest_result"]),
+    _tool("get_trace_report", "Get the complete spans, token, latency and cost report for one trace.",
+          {"trace_id": {"type": "string"}}, ["trace_id"]),
+    _tool("get_monitoring_metrics", "Get task success and component failure metrics.", {}),
+    _tool("compare_agent_modes", "Compare single-Agent and multi-Agent quality, cost and latency.", {}),
 ]
 
 TOOL_HANDLERS = {tool["name"]: tool["name"] for tool in TOOLS}
@@ -807,28 +960,83 @@ def build_system_prompt(workspace: Path) -> str:
             f"Workspace: {workspace.resolve()}")
 
 
+def _message_text(message: dict) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    return " ".join(str(getattr(block, "text", "")) for block in content)
+
+
 def agent_loop(client, messages: list, runtime: ResearchRuntime, model: str,
-               max_rounds: int = 20, allowed_tool_names: set[str] | None = None) -> str:
+               max_rounds: int = 20, allowed_tool_names: set[str] | None = None,
+               session_id: str = "default", agent_name: str = "lead",
+               trace_id: str | None = None, mode: str = "single",
+               task_type: str = "research_task") -> str:
     state = RecoveryState()
+    owns_trace = trace_id is None
+    trace_id = runtime.traces.start_trace(task_type, mode, trace_id)
+    latest_query = next((_message_text(message) for message in reversed(messages)
+                         if message.get("role") == "user"), "")
+    if latest_query:
+        runtime.memory.append_turn(session_id, "user", latest_query)
+    messages[:] = runtime.memory.compress_messages(messages, session_id)
+    memory_context = runtime.memory.build_context(latest_query, session_id)
+    complexity = classify_complexity(latest_query)
     for _ in range(max_rounds):
+        budget_state = runtime.traces.check_budget(trace_id)
+        if budget_state:
+            runtime.traces.finish_trace(trace_id, "paused", "budget exceeded")
+            return ("Agent paused: trace budget exceeded; approve "
+                    f"{budget_state.get('approval_id')} and use /continue")
         for job in runtime.scheduler.due_jobs():
             messages.append({"role": "user", "content": f"[Scheduled] {job.prompt}"})
         tools = runtime.assemble_tool_pool(allowed_tool_names)
-        response = with_retry(lambda: client.messages.create(
-            model=model, system=build_system_prompt(runtime.workspace), messages=messages,
-            tools=tools, max_tokens=8000), state)
+        request = {
+            "model": model,
+            "system": (build_system_prompt(runtime.workspace)
+                       + f"\nYour agent identity is {agent_name}."
+                       + f"\nCurrent trace_id: {trace_id}."
+                       + f"\nRelevant memory context: {memory_context}"),
+            "messages": messages, "tools": tools, "max_tokens": 8000,
+        }
+        if hasattr(client, "create_for_task"):
+            create = lambda: client.create_for_task(complexity, **request)
+        else:
+            create = lambda: client.messages.create(**request)
+        model_started = time.perf_counter()
+        try:
+            response = with_retry(create, state)
+        except Exception as exc:
+            runtime.traces.record_model(trace_id, agent_name,
+                                        (time.perf_counter() - model_started) * 1000,
+                                        error=str(exc))
+            if owns_trace:
+                runtime.traces.finish_trace(trace_id, "failed", str(exc), 0.0)
+            raise
+        runtime.traces.record_model(trace_id, agent_name,
+                                    (time.perf_counter() - model_started) * 1000,
+                                    response=response)
         messages.append({"role": "assistant", "content": response.content})
         tool_blocks = [b for b in response.content if getattr(b, "type", None) == "tool_use"]
         if not tool_blocks:
-            return "\n".join(getattr(b, "text", "") for b in response.content
-                             if getattr(b, "type", None) == "text")
+            answer = "\n".join(getattr(b, "text", "") for b in response.content
+                               if getattr(b, "type", None) == "text")
+            runtime.memory.append_turn(session_id, "assistant", answer)
+            if owns_trace:
+                runtime.traces.finish_trace(trace_id, "completed", quality=1.0)
+            return answer
         allowed = {tool["name"] for tool in tools}
         results = [{"type": "tool_result", "tool_use_id": block.id,
                     "content": (runtime.execute(block.name, block.input)
                                 if block.name in allowed else "Error: tool not allowed")}
                    for block in tool_blocks]
         messages.append({"role": "user", "content": results})
-    return "Agent stopped: maximum rounds reached."
+    stopped = "Agent stopped: maximum rounds reached."
+    runtime.bad_cases.collect("planning", latest_query, [], stopped,
+                              "agent_loop", source="system")
+    if owns_trace:
+        runtime.traces.finish_trace(trace_id, "failed", stopped, 0.0)
+    return stopped
 
 
 def run_cli(workspace: Path | None = None) -> int:
@@ -842,13 +1050,16 @@ def run_cli(workspace: Path | None = None) -> int:
     runtime = ResearchRuntime(workspace)
     model = os.getenv("MODEL_ID", MODEL)
     if not model: print("MODEL_ID is required"); return 2
-    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"),
-                       base_url=os.getenv("ANTHROPIC_BASE_URL"))
-    team = AgentTeam(runtime, lambda: Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"),
-                                                base_url=os.getenv("ANTHROPIC_BASE_URL")), model)
+    client = build_model_client(Anthropic, runtime.data_dir)
+    team = AgentTeam(runtime, lambda: build_model_client(Anthropic, runtime.data_dir),
+                     model, runner=agent_loop)
     runtime.bind_team(team)
-    messages = []
+    session_id = os.getenv("RESEARCH_SESSION_ID", "default")
+    session = runtime.memory.load_session(session_id)
+    messages = [{"role": item["role"], "content": item["content"]}
+                for item in session.messages]
     print("Research Workflow Agent. Type q to quit.")
+    last_query, last_answer, last_trace_id = "", "", None
     while True:
         try: query = input("research >> ").strip()
         except (EOFError, KeyboardInterrupt): return 0
@@ -861,8 +1072,45 @@ def run_cli(workspace: Path | None = None) -> int:
                 if approval and approval["action"] == "mcp_tool_call":
                     print(runtime.execute_approved_action(request_id))
             continue
+        if query.startswith("/resolve "):
+            _, decision_id, selected_id = query.split(maxsplit=2)
+            print(runtime.resolve_conflict(decision_id, selected_id))
+            continue
+        if query == "/continue":
+            if not last_trace_id:
+                print("No paused trace to continue")
+                continue
+            last_answer = agent_loop(
+                client, messages, runtime, model, session_id=session_id,
+                trace_id=last_trace_id)
+            print(last_answer)
+            continue
+        if query.startswith("/feedback "):
+            parts = query.split(maxsplit=2)
+            if len(parts) < 2 or parts[1] not in {"correction", "downvote", "rejection"}:
+                print("Usage: /feedback correction|downvote|rejection [comment]")
+                continue
+            item = runtime.bad_cases.collect_feedback(
+                parts[1], last_query, last_answer,
+                parts[2] if len(parts) == 3 else "")
+            print(f"Bad Case {item.id} saved; review approval: {item.approval_id}")
+            continue
+        if query.startswith("/review-case "):
+            parts = query.split(maxsplit=3)
+            if len(parts) != 4 or parts[2] not in {"approve", "reject"}:
+                print("Usage: /review-case CASE_ID approve|reject REVIEWER")
+                continue
+            try:
+                item = runtime.bad_cases.review(parts[1], parts[2] == "approve", parts[3])
+                print(f"Bad Case {item.id} {item.review_status}")
+            except (KeyError, PermissionError) as exc:
+                print(f"Error: {exc}")
+            continue
         messages.append({"role": "user", "content": query})
-        print(agent_loop(client, messages, runtime, model))
+        last_query = query
+        last_answer = agent_loop(client, messages, runtime, model, session_id=session_id)
+        last_trace_id = runtime.traces.current_trace_id
+        print(last_answer)
 
 
 if __name__ == "__main__":

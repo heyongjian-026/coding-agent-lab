@@ -5,7 +5,7 @@
 ## 已实现
 
 - 本地关键词 RAG：资料分块、持久化与检索
-- 长期研究记忆
+- 工作、短期、长期三级研究记忆与会话恢复
 - 带依赖关系的持久化科研任务看板
 - 人工审批请求与审批状态
 - 持久化 Cron 任务和到期任务注入
@@ -14,9 +14,13 @@
 - DashScope 兼容 Embedding API 与 Elasticsearch 向量存储
 - 审批通过后投递到本地 outbox 的通知流程
 - JSON-RPC stdio MCP 客户端、动态工具发现与分发
+- Planner、Researcher、Writer、Reviewer 四角色科研工作流
+- 结论冲突检测、证据仲裁、人工确认与审核后长期记忆写入
+- 工作流检查点、局部回滚、失败隔离和恢复执行
+- 主备模型与复杂度路由，以及 Embedding、Elasticsearch、MCP 降级
 - 后台科研子 Agent、角色隔离和 Lead 消息收件箱
 
-当前已完成 Stage 1–4，共有 17 项项目内自动化测试。MCP 客户端已经实现，但 Zotero、GitHub 等具体服务器需要用户另行选择、安装和配置。
+当前共有 41 项项目内自动化测试。MCP 客户端已经实现，但 Zotero、GitHub 等具体服务器需要用户另行选择、安装和配置。
 
 Stage 5 将实现端到端研究周报与评估。真实外部通知连接器仍属于后续工作，详见 [`implementation-plan.md`](implementation-plan.md)。总体范围和演示流程见 [`../agent-projects-plan.md`](../agent-projects-plan.md)。
 
@@ -35,9 +39,28 @@ python research_agent.py --workspace D:\path\to\research-workspace
 /reject approval_...
 ```
 
+当两个 Agent 的结论证据接近时，先审批仲裁请求，再选择结论：
+
+```text
+/approve approval_...
+/resolve decision_... conclusion_...
+```
+
+用户发现错误结果后，可以保存纠正、点踩或拒绝案例。候选案例先创建人工审核请求，只有审核通过后才进入正式案例库：
+
+```text
+/feedback correction 这里缺少实验依据
+/approve approval_...
+/review-case case_... approve reviewer-name
+```
+
+每次任务都会生成 Trace，记录模型 Token、组件耗时、费用和执行状态。可通过 `TRACE_MAX_TOKENS`、`TRACE_MAX_SECONDS`、`TRACE_MAX_COST` 设置预算；超限后 Agent 暂停并创建人工审批请求。执行 `/approve approval_...` 后使用 `/continue` 从原 trace 继续。
+
+可以通过 `FALLBACK_MODEL_ID` 配置备用模型，通过 `LIGHT_MODEL_ID` 配置简单任务使用的轻量模型；未配置时继续使用 `MODEL_ID`。
+
 ## MCP 配置
 
-将 `mcp_servers.example.json` 的结构复制到研究工作区的 `.research-agent/mcp_servers.json`，填写已安装 MCP 服务器的 argv 数组。Agent 只能按名称连接配置中已有的服务器，不能自行提供启动命令。
+将 `mcp_servers.example.json` 的结构复制到研究工作区的 `.research-agent/mcp_servers.json`，填写已安装 MCP 服务器的 argv 数组。可用 `fallback_servers` 指定同工具的备用数据源。Agent 只能按名称连接配置中已有的服务器，不能自行提供启动命令。
 
 连接后，服务器工具会以 `mcp__服务器名__工具名` 加入正常工具池。示例配置中的命令只是占位符，不会自动安装 Zotero 或 GitHub MCP 服务器。
 
@@ -52,5 +75,5 @@ Elasticsearch 默认连接 `http://localhost:9200`，索引名为 `research-agen
 测试：
 
 ```powershell
-python -m pytest test_research_agent.py -q
+python -m pytest -q
 ```

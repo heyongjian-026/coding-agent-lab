@@ -1,6 +1,10 @@
 {
   "zotero": {
-    "command": ["replace-with-zotero-mcp-command"]
+    "command": ["replace-with-zotero-mcp-command"],
+    "fallback_servers": ["zotero_backup"]
+  },
+  "zotero_backup": {
+    "command": ["replace-with-backup-zotero-mcp-command"]
   },
   "github": {
     "command": ["replace-with-github-mcp-command"],
