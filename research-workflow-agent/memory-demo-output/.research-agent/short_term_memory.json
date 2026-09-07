@@ -1,0 +1,29 @@
+{
+  "session_memory_demo": {
+    "session_id": "session_memory_demo",
+    "messages": [
+      {
+        "role": "user",
+        "content": "短期记忆主要保存什么？",
+        "created_at": "2026-09-07T06:57:44+00:00"
+      },
+      {
+        "role": "assistant",
+        "content": "短期记忆保存当前会话的近期问答和历史摘要。",
+        "created_at": "2026-09-07T06:57:44+00:00"
+      },
+      {
+        "role": "user",
+        "content": "长期记忆如何进入上下文？",
+        "created_at": "2026-09-07T06:57:44+00:00"
+      },
+      {
+        "role": "assistant",
+        "content": "每轮根据当前问题检索相关长期记忆并加入 Prompt。",
+        "created_at": "2026-09-07T06:57:44+00:00"
+      }
+    ],
+    "summary": "user: 我准备研究 Agent 记忆系统。\nassistant: 可以先比较工作记忆、短期记忆和长期记忆。",
+    "updated_at": "2026-09-07T06:57:44+00:00"
+  }
+}

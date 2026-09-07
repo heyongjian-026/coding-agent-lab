@@ -1,0 +1,25 @@
+{
+  "task_memory_demo": {
+    "task_id": "task_memory_demo",
+    "plan": [
+      "确定研究问题",
+      "检索论文",
+      "整理证据",
+      "撰写结论"
+    ],
+    "evidence": [
+      {
+        "content": "论文 A 将 Agent 记忆划分为工作、短期和长期记忆。",
+        "source": "paper-A.pdf#page=3",
+        "confidence": 0.92,
+        "created_at": "2026-09-07T06:57:44+00:00"
+      }
+    ],
+    "progress": {
+      "确定研究问题": "completed",
+      "检索论文": "completed",
+      "整理证据": "in_progress"
+    },
+    "updated_at": "2026-09-07T06:57:44+00:00"
+  }
+}

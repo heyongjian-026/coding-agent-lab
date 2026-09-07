@@ -1,0 +1,35 @@
+[
+  {
+    "id": "mem_068796f0ae2943efabf6e7762fcf6482",
+    "category": "preference",
+    "content": "用户偏好使用中文解释，并希望给出具体代码位置。",
+    "source": "user",
+    "confidence": 1.0,
+    "confirmed": true,
+    "created_at": "2026-09-07T06:57:44+00:00",
+    "updated_at": "2026-09-07T06:57:44+00:00",
+    "supersedes": []
+  },
+  {
+    "id": "mem_c491e448e5ca4622a17e5bbe914d1574",
+    "category": "research_direction",
+    "content": "用户当前研究方向是 Agent 记忆系统和多 Agent 协作。",
+    "source": "user",
+    "confidence": 0.95,
+    "confirmed": true,
+    "created_at": "2026-09-07T06:57:44+00:00",
+    "updated_at": "2026-09-07T06:57:44+00:00",
+    "supersedes": []
+  },
+  {
+    "id": "mem_398493cd52d04f6c8b38d6f56740e797",
+    "category": "confirmed_conclusion",
+    "content": "三级记忆由工作记忆、短期记忆和长期记忆组成。",
+    "source": "reviewer",
+    "confidence": 0.9,
+    "confirmed": true,
+    "created_at": "2026-09-07T06:57:44+00:00",
+    "updated_at": "2026-09-07T06:57:44+00:00",
+    "supersedes": []
+  }
+]
