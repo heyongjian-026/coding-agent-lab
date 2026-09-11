@@ -1,0 +1,36 @@
+name: Coding Agent Java Regression
+
+on:
+  push:
+    paths:
+      - "coding-agent-java/**"
+      - ".github/workflows/coding-agent-java-regression.yml"
+  pull_request:
+    paths:
+      - "coding-agent-java/**"
+      - ".github/workflows/coding-agent-java-regression.yml"
+
+jobs:
+  test-and-evaluate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: coding-agent-java
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - name: Unit and offline regression tests
+        run: mvn --batch-mode test
+      - name: Save explicit evaluation report
+        run: >-
+          mvn --batch-mode exec:java
+          -Dexec.mainClass=com.hyj.codingagent.EvalRunner
+          -Dexec.args="--dataset evals/tasks.json --output evals/latest-results.json --baseline evals/baseline.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coding-agent-java-evaluation
+          path: coding-agent-java/evals/latest-results.json

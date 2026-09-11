@@ -1,0 +1,3 @@
+target/
+.coding-agent/
+evals/latest-results.json

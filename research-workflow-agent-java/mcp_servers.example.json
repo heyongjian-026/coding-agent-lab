@@ -1,0 +1,8 @@
+{
+  "papers": {
+    "command": ["python", "path/to/paper_mcp_server.py"],
+    "cwd": ".",
+    "env": {},
+    "fallback_servers": ["papers_backup"]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "suite": "research-rag-v1",
+  "documents": [
+    {"title":"Transformer","source":"paper-transformer","content":"# Architecture\nThe Transformer replaces recurrence with multi-head self-attention. Positional encoding preserves token order.\n\n# Training\nThe original model uses an Adam optimizer and a warmup learning-rate schedule."},
+    {"title":"BERT","source":"paper-bert","content":"# Pretraining\nBERT learns bidirectional representations with masked language modeling and next sentence prediction.\n\n# Evaluation\nIt is fine-tuned for question answering and classification tasks."},
+    {"title":"RAG","source":"paper-rag","content":"# Method\nRetrieval-augmented generation combines a parametric generator with non-parametric retrieved documents. The retriever supplies evidence passages to generation."},
+    {"title":"LoRA","source":"paper-lora","content":"# Efficient tuning\nLoRA freezes pretrained weights and injects trainable low-rank matrices. It reduces the number of trainable parameters for adaptation."},
+    {"title":"ReAct","source":"paper-react","content":"# Agent reasoning\nReAct interleaves reasoning traces with actions and observations. Tool feedback lets the agent revise its next action."},
+    {"title":"BM25","source":"paper-bm25","content":"# Lexical ranking\nBM25 ranks documents using term frequency, inverse document frequency and document-length normalization. It is effective for exact terminology."},
+    {"title":"DPR","source":"paper-dpr","content":"# Dense retrieval\nDense Passage Retrieval uses separate question and passage encoders. Similarity in embedding space retrieves semantically related passages."},
+    {"title":"Reciprocal Rank Fusion","source":"paper-rrf","content":"# Rank fusion\nReciprocal Rank Fusion combines multiple ranked lists using reciprocal rank scores. It does not require score calibration between retrievers."},
+    {"title":"Agent memory","source":"paper-memory","content":"# Memory tiers\nWorking memory tracks the active task. Short-term memory stores recent dialogue. Long-term memory keeps stable knowledge across sessions."},
+    {"title":"Citation evaluation","source":"paper-citation","content":"# Grounded answers\nCitation precision measures whether cited evidence supports a claim. Citation recall measures whether important claims have supporting citations."}
+  ],
+  "cases": [
+    {"id":"q01","query":"What mechanism replaces recurrence in Transformer?","expected_source":"paper-transformer"},
+    {"id":"q02","query":"Why does Transformer use positional encoding?","expected_source":"paper-transformer"},
+    {"id":"q03","query":"Which pretraining objective masks input tokens?","expected_source":"paper-bert"},
+    {"id":"q04","query":"Which model learns bidirectional representations?","expected_source":"paper-bert"},
+    {"id":"q05","query":"What combines retrieval with a parametric generator?","expected_source":"paper-rag"},
+    {"id":"q06","query":"Where does a generator obtain evidence passages?","expected_source":"paper-rag"},
+    {"id":"q07","query":"Which tuning method injects low-rank matrices?","expected_source":"paper-lora"},
+    {"id":"q08","query":"How can trainable parameters be reduced during adaptation?","expected_source":"paper-lora"},
+    {"id":"q09","query":"Which agent pattern interleaves reasoning and actions?","expected_source":"paper-react"},
+    {"id":"q10","query":"How does tool feedback affect the next action?","expected_source":"paper-react"},
+    {"id":"q11","query":"Which ranking algorithm uses term frequency and IDF?","expected_source":"paper-bm25"},
+    {"id":"q12","query":"What retrieval works well for exact terminology?","expected_source":"paper-bm25"},
+    {"id":"q13","query":"Which retriever has question and passage encoders?","expected_source":"paper-dpr"},
+    {"id":"q14","query":"What retrieves passages by embedding similarity?","expected_source":"paper-dpr"},
+    {"id":"q15","query":"How are ranked lists combined without score calibration?","expected_source":"paper-rrf"},
+    {"id":"q16","query":"Which fusion method uses reciprocal rank scores?","expected_source":"paper-rrf"},
+    {"id":"q17","query":"Which memory stores recent dialogue?","expected_source":"paper-memory"},
+    {"id":"q18","query":"What does working memory track?","expected_source":"paper-memory"},
+    {"id":"q19","query":"What metric checks whether evidence supports a claim?","expected_source":"paper-citation"},
+    {"id":"q20","query":"What metric checks whether important claims are cited?","expected_source":"paper-citation"},
+    {"id":"q21","query":"quantum banana telescope zxqv","expect_no_result":true}
+  ]
+}
